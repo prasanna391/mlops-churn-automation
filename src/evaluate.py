@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 import joblib
+import json
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
@@ -27,7 +29,22 @@ def run_evaluation():
     print(f"Recall   : {rec:.4f}")
     print(f"F1-Score : {f1:.4f}")
     print("-------------------------------\n")
-    
+    # Save evaluation metrics for Lab 7 Quality Gate
+    os.makedirs('outputs', exist_ok=True)
+
+    evaluation_report = {
+        "metrics": {
+            "accuracy": acc,
+            "precision": prec,
+            "recall": rec,
+            "f1_score": f1
+        }
+    }
+
+    with open('outputs/evaluation_report.json', 'w', encoding='utf-8') as f:
+        json.dump(evaluation_report, f, indent=4)
+
+    print("Evaluation report saved to outputs/evaluation_report.json")    
     # 4. Error Analysis Export
     # We load the raw dataset just to get the original customer rows back
     df = pd.read_csv('data/raw/churn.csv')
