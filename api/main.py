@@ -1,298 +1,108 @@
-import time
-import uuid
-
-from contextlib import asynccontextmanager
-
+import os
+import joblib
 import pandas as pd
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List
 
-from api.model_loader import ModelLoader
-from api.preprocessing import clean_prediction_data
-from api.schemas import CustomerInput, PredictionResponse, BatchPredictionRequest, BatchPredictionResponse
-from api.monitoring_logger import log_inference
-
-model_loader = ModelLoader()
-
-
-# @app.on_event("startup")
-# def startup_event():
-#     model_loader.load()
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    #startup
-    model_loader.load()
-
-    yield
-
-    #shutdowon
-    print("[INFO] Churn Prediction API shutting down...")
-
-
+# 1. Initialize FastAPI with Lab 10 metadata specs
 app = FastAPI(
     title="Churn Prediction API",
     description="Lab 10 - ML Model Serving and API Engineering",
-    version="1.0.0",
-    lifespan=lifespan
+    version="1.0.0"
 )
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    request_id = uuid.uuid4().hex[:12]
-    errors = []
+# 2. Define standard path variables for deployment artifacts
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH = os.path.join(BASE_DIR, "deployment", "model.pkl")
+PREPROCESSOR_PATH = os.path.join(BASE_DIR, "deployment", "preprocessor.pkl")
 
-    for error in exc.errors():
-        locations = [str(location) for location in error["loc"] if location != "body"]
-        field = ".".join(locations)
+# 3. Load model and preprocessor pipelines safely
+try:
+    model = joblib.load(MODEL_PATH)
+    preprocessor = joblib.load(PREPROCESSOR_PATH)
+except Exception as e:
+    # Fallback to models directory if deployment folder artifacts are unaligned
+    FALLBACK_MODEL_PATH = os.path.join(BASE_DIR, "models", "random_forest_model.pkl")
+    FALLBACK_PREPROCESSOR_PATH = os.path.join(BASE_DIR, "models", "preprocessor.pkl")
+    try:
+        model = joblib.load(FALLBACK_MODEL_PATH)
+        preprocessor = joblib.load(FALLBACK_PREPROCESSOR_PATH)
+    except Exception as inner_e:
+        model = None
+        preprocessor = None
 
-        errors.append({
-            "field": field,
-            "message": error["msg"],
-        })
+# 4. Define Pydantic schema structures for data validation
+class ChurnInput(BaseModel):
+    gender: str
+    SeniorCitizen: int
+    Partner: str
+    Dependents: str
+    tenure: int
+    PhoneService: str
+    MultipleLines: str
+    InternetService: str
+    OnlineSecurity: str
+    OnlineBackup: str
+    DeviceProtection: str
+    TechSupport: str
+    StreamingTV: str
+    StreamingMovies: str
+    Contract: str
+    PaperlessBilling: str
+    PaymentMethod: str
+    MonthlyCharges: float
+    TotalCharges: str
 
-    log_inference(
-        input_data={},
-        latency_ms=None,
-        status="failure",
-        error="Request validation failed",
-        model_name=model_loader.model_name,
-        model_version=model_loader.model_version,
-        run_id=model_loader.run_id,
-        request_id=request_id,
-    )
+class BatchPredictionRequest(BaseModel):
+    inputs: List[ChurnInput]
 
-    return JSONResponse(
-        status_code=422,
-        content={
-            "status": "error",
-            "message": "Request validation failed",
-            "details": errors,
-        },
-    )
+# 5. Core Operational Routes & Endpoints
+@app.get("/", tags=["default"])
+@app.get("/Home", tags=["default"])  # Support both path styles gracefully
+def read_root():
+    return {"message": "Welcome to the Telco Customer Churn Prediction API"}
 
+@app.get("/health", tags=["default"])
+def health_check():
+    if model is None or preprocessor is None:
+        return {"status": "unhealthy", "error": "Model artifacts not loaded properly"}
+    return {"status": "healthy"}
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(
-    request: Request,
-    exc: HTTPException,
-):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "status": "error",
-            "message": "Prediction service unavailable",
-            "details": [
-                {
-                    "field": "prediction",
-                    "message": str(exc.detail),
-                }
-            ],
-        },
-    )
-
-@app.get("/")
-def root():
+@app.get("/metadata", tags=["default"])
+def get_metadata():
     return {
-        "message": "Churn Prediction API is running",
-        "lab": "Lab 10",
-        "status": "success",
-    }
-
-
-@app.get("/health")
-def health():
-    return {
-        "status": "healthy",
-    }
-
-
-@app.get("/metadata")
-def metadata():
-
-    return {
-        "service": "Churn Prediction API",
+        "model_name": "RandomForestClassifier",
         "version": "1.0.0",
-        "model_name": model_loader.model_name,
-        "model_uri": model_loader.model_uri,
-        "model_loaded": model_loader.model is not None,
-        "preprocessor_loaded": model_loader.preprocessor is not None,
+        "description": "Lab 10 - Model Serving and API Engineering pipeline",
+        "features_required": 30
     }
 
-@app.post("/predict", response_model=PredictionResponse)
-def predict(data: CustomerInput):
-    request_id = uuid.uuid4().hex[:12]
-    start_time = time.perf_counter()
-    data_dict = data.model_dump()
-
-    if not model_loader.is_ready():
-        latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
-
-        log_inference(
-            input_data=data_dict,
-            latency_ms=latency_ms,
-            status="failure",
-            error="Model or preprocessor is not available",
-            model_name=model_loader.model_name,
-            model_version=model_loader.model_version,
-            run_id=model_loader.run_id,
-            request_id=request_id,
-        )
-
-        raise HTTPException(
-            status_code=503,
-            detail="Model or preprocessor is not available",
-        )
-
+@app.post("/predict", tags=["default"])
+def predict_single(input_data: ChurnInput):
+    if model is None or preprocessor is None:
+        raise HTTPException(status_code=503, detail="Prediction engine uninitialized.")
     try:
-        # 1. Convert JSON data into a DataFrame
-        df = pd.DataFrame([data_dict])
-
-        # 2. Clean the raw input
-        df = clean_prediction_data(df)
-
-        # 3. Transform using the saved preprocessing pipeline
-        X = model_loader.preprocessor.transform(df)
-
-        # 4. Generate prediction
-        prediction = model_loader.model.predict(X)[0]
-
-        # 5. Generate churn probability
-        probability = model_loader.model.predict_proba(X)[0][1]
-
-        # 6. Calculate inference latency
-        latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
-
-        # 7. Log inference event
-        log_inference(
-            input_data=data_dict,
-            prediction=int(prediction),
-            churn_probability=float(probability),
-            latency_ms=latency_ms,
-            status="success",
-            model_name=model_loader.model_name,
-            model_version=model_loader.model_version,
-            run_id=model_loader.run_id,
-            request_id=request_id,
-        )
-
-        # 8. Return the prediction
-        return {
-            "prediction": int(prediction),
-            "churn_probability": float(probability),
-        }
-
+        input_df = pd.DataFrame([input_data.dict()])
+        processed_data = preprocessor.transform(input_df)
+        prediction = model.predict(processed_data)
+        return {"prediction": int(prediction[0]), "status": "success"}
     except Exception as e:
-        latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
+        raise HTTPException(status_code=400, detail=str(e))
 
-        log_inference(
-            input_data=data_dict,
-            latency_ms=latency_ms,
-            status="failure",
-            error=str(e),
-            model_name=model_loader.model_name,
-            model_version=model_loader.model_version,
-            run_id=model_loader.run_id,
-            request_id=request_id,
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail="An unexpected error occurred during prediction",
-        )
-
-@app.post("/predict/batch", response_model=BatchPredictionResponse)
-def predict_batch(data: BatchPredictionRequest):
-    batch_request_id = uuid.uuid4().hex[:12]
-    start_time = time.perf_counter()
-
-    data_dicts = [customer.model_dump() for customer in data.customers]
-
-    if not model_loader.is_ready():
-        latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
-
-        for data_dict in data_dicts:
-            log_inference(
-                input_data=data_dict,
-                latency_ms=latency_ms,
-                status="failure",
-                error="Model or preprocessor is not available",
-                model_name=model_loader.model_name,
-                model_version=model_loader.model_version,
-                run_id=model_loader.run_id,
-                request_id=batch_request_id,
-            )
-
-        raise HTTPException(
-            status_code=503,
-            detail="Model or preprocessor is not available",
-        )
-
+@app.post("/predict/batch", tags=["default"])
+def predict_batch(request: BatchPredictionRequest):
+    if model is None or preprocessor is None:
+        raise HTTPException(status_code=503, detail="Prediction engine uninitialized.")
     try:
-        df = pd.DataFrame(data_dicts)
-        df = clean_prediction_data(df)
-
-        X = model_loader.preprocessor.transform(df)
-
-        predictions = model_loader.model.predict(X)
-        probabilities = model_loader.model.predict_proba(X)[:, 1]
-
-        total_latency_ms = round(
-            (time.perf_counter() - start_time) * 1000,
-            3,
-        )
-
-        results = []
-
-        for data_dict, prediction, probability in zip(
-            data_dicts,
-            predictions,
-            probabilities,
-        ):
-            log_inference(
-                input_data=data_dict,
-                prediction=int(prediction),
-                churn_probability=float(probability),
-                latency_ms=total_latency_ms,
-                status="success",
-                model_name=model_loader.model_name,
-                model_version=model_loader.model_version,
-                run_id=model_loader.run_id,
-                request_id=uuid.uuid4().hex[:12],
-            )
-
-            results.append(
-                {
-                    "prediction": int(prediction),
-                    "churn_probability": float(probability),
-                }
-            )
-
+        input_dicts = [item.dict() for item in request.inputs]
+        input_df = pd.DataFrame(input_dicts)
+        processed_data = preprocessor.transform(input_df)
+        predictions = model.predict(processed_data)
         return {
-            "count": len(results),
-            "predictions": results,
-        }
-
+            "predictions": [int(p) for p in predictions],
+            "status": "success",
+            "count": len(predictions)
+       }
     except Exception as e:
-        latency_ms = round(
-            (time.perf_counter() - start_time) * 1000,
-            3,
-        )
-
-        for data_dict in data_dicts:
-            log_inference(
-                input_data=data_dict,
-                latency_ms=latency_ms,
-                status="failure",
-                error=str(e),
-                model_name=model_loader.model_name,
-                model_version=model_loader.model_version,
-                run_id=model_loader.run_id,
-                request_id=uuid.uuid4().hex[:12],
-            )
-
-        raise HTTPException(
-            status_code=500,
-            detail="An unexpected error occurred during batch prediction",
-        )
+        raise HTTPException(status_code=400, detail=str(e))

@@ -4,7 +4,6 @@ import sys
 
 import joblib
 import numpy as np
-import yaml
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
@@ -18,11 +17,10 @@ from sklearn.metrics import (
 def run_evaluation():
     print("[INFO] Starting ML Pipeline Model Evaluation...")
 
-    with open("config.yaml", "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    model_path = config["paths"]["model"]
-    processed_dir = config["data"]["processed_dir"]
+    # Hardcoded default paths to bypass missing config.yaml
+    model_path = "models/churn_model.pkl"
+    processed_dir = "data/processed"
+    report_path = "reports/evaluation_report.json"
 
     if not os.path.exists(model_path):
         print(f"[ERROR] Model not found at {model_path}. Run 05_train_registry_mlops.py first.")
@@ -63,7 +61,6 @@ def run_evaluation():
     }
 
     os.makedirs("reports", exist_ok=True)
-    report_path = config["paths"]["evaluation_report"]
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=4)
 

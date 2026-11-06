@@ -1,6 +1,7 @@
 {
-    "status": "success",
+    "status": "FAILED",
     "stage": "Lab 10 - Failure Injection Testing",
-    "tests_passed": 2,
-    "reproducibility": "PASSED"
+    "total_errors": 2,
+    "missing_value_detected": 1,
+    "invalid_numerical_value_detected": 1
 }

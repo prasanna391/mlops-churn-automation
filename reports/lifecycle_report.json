@@ -1,0 +1,13 @@
+{
+    "status": "success",
+    "model_name": "churn-prediction-model",
+    "decision_metric": "f1_score",
+    "candidate_version": null,
+    "candidate_run_id": null,
+    "candidate_metric": null,
+    "production_version_before": 1,
+    "production_metric_before": 0.6252723311546841,
+    "promoted": false,
+    "decision": "NO_CANDIDATE",
+    "production_version_after": 1
+}
